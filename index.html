@@ -87,8 +87,8 @@
   localStorage.setItem(DEVICE_KEY, deviceId);
   let attendees = load(DB_KEY, []);
   let queue = load(QUEUE_KEY, []);
-  const DEFAULT_URL = "PASTE_YOUR_EXEC_URL_HERE";
-  let backendUrl = localStorage.getItem(URL_KEY) || (DEFAULT_URL.startsWith("https://script.google.com/") ? DEFAULT_URL : "");
+  const DEFAULT_URL = "https://script.google.com/macros/s/AKfycbwfoL3O1kpnCYbmdRZko72PTYlbhMkJVHNAc3CT8eCgQ8HwAiacIw_exa7-hDFQaOPN/exec";
+  let backendUrl = localStorage.getItem(URL_KEY) || (DEFAULT_URL.startsWith("https://script.google.com/") ? DEFAULT_URL : "https://script.google.com/macros/s/AKfycbwfoL3O1kpnCYbmdRZko72PTYlbhMkJVHNAc3CT8eCgQ8HwAiacIw_exa7-hDFQaOPN/exec");
 
   function load(key, fallback){ try{return JSON.parse(localStorage.getItem(key)) || fallback}catch{return fallback} }
   function save(){ localStorage.setItem(DB_KEY, JSON.stringify(attendees)); localStorage.setItem(QUEUE_KEY, JSON.stringify(queue)); }
