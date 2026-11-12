@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#102b4e">
+  <meta name="description" content="Christmas Party 2026 attendee registration">
+  <title>Christmas Party 2026 | Registration</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="snow"></div>
+<header>
+  <div class="eyebrow">YOU'RE INVITED TO CELEBRATE</div>
+  <h1 class="hero-title">❄ CHRISTMAS PARTY 2026 ❄</h1>
+  <div class="hero-sub">WINTER WONDERLAND · BLUE · WHITE · SILVER</div>
+</header>
+<main>
+  <div class="card">
+    <nav class="tabs" aria-label="Registration navigation">
+      <button class="tab active" id="registerTab" type="button">Register</button>
+      <button class="tab" id="adminTab" type="button">Attendee List</button>
+    </nav>
+
+    <section id="registerView">
+      <h2>Join the celebration!</h2>
+      <p class="intro">Enter your name below to register for the Christmas Party.</p>
+      <form id="registrationForm">
+        <label for="fullName">Full name</label>
+        <input id="fullName" name="fullName" maxlength="80" autocomplete="name" placeholder="e.g. Juan Dela Cruz" required>
+        <label for="dept" style="margin-top:14px">Department</label>
+        <select id="dept" name="dept" required></select>
+        <input id="deptOther" class="hidden" maxlength="60" placeholder="Type your department" style="margin-top:10px" autocomplete="off">
+        <button class="primary" id="submitBtn" type="submit">Register Now</button>
+      </form>
+      <div id="registerStatus" class="status" role="status"></div>
+      <p class="note">Please register only once using your complete name and department. Your name will be included in the event's Duck Race raffle list.</p>
+    </section>
+
+    <section id="adminView" class="hidden">
+      <h2>Attendee dashboard</h2>
+      <p class="intro">Review registrations, manage names, and prepare your Duck Race entries.</p>
+      <div class="stats">
+        <div class="stat"><strong id="totalCount">0</strong><span>Total names</span></div>
+        <div class="stat"><strong id="syncedCount">0</strong><span>Synced online</span></div>
+        <div class="stat"><strong id="pendingCount">0</strong><span>Waiting to sync</span></div>
+      </div>
+      <div class="two">
+        <div><label for="manualName">Add a name manually</label><input id="manualName" placeholder="Full name" maxlength="80"></div>
+        <div><label for="manualDept">Department</label><select id="manualDept"></select><input id="manualDeptOther" class="hidden" maxlength="60" placeholder="Type department" style="margin-top:10px" autocomplete="off"></div>
+      </div>
+      <button class="secondary" id="addManual" style="width:100%;padding:13px;margin-top:10px">Add attendee</button>
+      <div class="toolbar">
+        <button class="secondary" id="copyNames">Copy all names</button>
+        <button class="secondary" id="downloadTxt">Download TXT</button>
+        <button class="secondary" id="downloadCsv">Download CSV</button>
+        <button class="secondary" id="refreshBtn">Refresh / Sync</button>
+      </div>
+      <div id="attendeeList" class="attendees"><div class="empty">No registrations yet.</div></div>
+      <div class="qr-wrap">
+        <div id="qrcode" aria-label="Registration QR code"></div>
+        <div><strong>Registration QR code</strong><p class="small">Display this QR code at the registration booth. It points to this website's public URL.</p><button class="secondary" id="printQr">Print QR code</button></div>
+      </div>
+      <div style="margin-top:20px">
+        <label for="backendUrl">Online database URL (Google Apps Script)</label>
+        <input id="backendUrl" placeholder="Paste your deployed Apps Script web app URL">
+        <div class="toolbar"><button class="secondary" id="saveBackend">Save database URL</button><button class="secondary" id="testBackend">Test connection</button></div>
+        <p class="small">Without a database URL, this device still works offline, but registrations from other phones will not automatically appear here. Follow SETUP.md to enable shared online registration.</p>
+      </div>
+      <div id="adminStatus" class="status" role="status"></div>
+    </section>
+  </div>
+  <div class="footer">Made for a wonderful winter celebration ✦ Merry Christmas!</div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const DB_KEY = "winterPartyAttendees_v1";
+  const QUEUE_KEY = "winterPartyQueue_v1";
+  const DEVICE_KEY = "winterPartyDevice_v1";
+  const URL_KEY = "winterPartyBackendUrl_v1";
+  const deviceId = localStorage.getItem(DEVICE_KEY) || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
+  localStorage.setItem(DEVICE_KEY, deviceId);
+  let attendees = load(DB_KEY, []);
+  let queue = load(QUEUE_KEY, []);
+  const DEFAULT_URL = "PASTE_YOUR_EXEC_URL_HERE";
+  let backendUrl = localStorage.getItem(URL_KEY) || (DEFAULT_URL.startsWith("https://script.google.com/") ? DEFAULT_URL : "");
+
+  function load(key, fallback){ try{return JSON.parse(localStorage.getItem(key)) || fallback}catch{return fallback} }
+  function save(){ localStorage.setItem(DB_KEY, JSON.stringify(attendees)); localStorage.setItem(QUEUE_KEY, JSON.stringify(queue)); }
+  function cleanName(s){ return String(s || "").trim().replace(/\s+/g," "); }
+  function keyName(s){ return cleanName(s).toLocaleLowerCase(); }
+  function keyAtt(n,d){ return keyName(n)+"|"+keyName(d); }
+  function sameAtt(a,n,d){ return keyAtt(a.name,a.dept)===keyAtt(n,d); }
+  // EDIT THIS LIST: these are the only departments guests can pick (exact spelling is used for duplicate detection)
+  const DEPARTMENTS = ["Accounting & Finance", "HR", "IT", "OPS Support", "Quality Management", "Safety Department", "Maintenance & Engineering", "Procurement M&E", "Purchasing", "Commercial", "OCC", "Flight Ops", "Chief Executive Office"];
+  function status(el, msg, type="ok"){ el.textContent=msg; el.className="status show "+type; }
+  function hideStatus(el){el.className="status";}
+  function setTab(which){
+    const reg=which==="register";
+    $("registerView").classList.toggle("hidden",!reg); $("adminView").classList.toggle("hidden",reg);
+    $("registerTab").classList.toggle("active",reg); $("adminTab").classList.toggle("active",!reg);
+    if(!reg){render(); makeQr(); syncAll();}
+  }
+  $("registerTab").onclick=()=>setTab("register");
+  $("adminTab").onclick=()=>setTab("admin");
+
+  function addLocal(name, dept, synced=false, id=null){
+    name=cleanName(name); dept=cleanName(dept); if(!name) return {ok:false,reason:"Enter a name."}; if(!dept) return {ok:false,reason:"Enter a department."};
+    if(attendees.some(a=>sameAtt(a,name,dept))) return {ok:false,reason:"This person is already registered in that department."};
+    attendees.push({id:id || (crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random()),name,dept,createdAt:new Date().toISOString(),synced});
+    save(); return {ok:true};
+  }
+  function jsonp(params, timeout=12000){
+    return new Promise((resolve,reject)=>{
+      if(!backendUrl){reject(new Error("No online database URL configured."));return;}
+      const cb="partyCb_"+Math.random().toString(36).slice(2);
+      const script=document.createElement("script"); const timer=setTimeout(()=>finish(new Error("Connection timed out.")),timeout);
+      function finish(err,data){clearTimeout(timer);delete window[cb];script.remove();err?reject(err):resolve(data);}
+      window[cb]=data=>finish(null,data);
+      const u=new URL(backendUrl); Object.entries({...params,callback:cb}).forEach(([k,v])=>u.searchParams.set(k,v));
+      script.onerror=()=>finish(new Error("Could not reach the online database."));
+      script.src=u.toString(); document.body.appendChild(script);
+    });
+  }
+  async function registerOnline(name,dept){
+    const result=await jsonp({action:"register",name,dept,deviceId});
+    if(!result || !result.ok) throw new Error((result&&result.message)||"Registration was not accepted.");
+    return result;
+  }
+  async function fetchOnline(){
+    const result=await jsonp({action:"list"});
+    if(!result || !result.ok) throw new Error((result&&result.message)||"Could not load attendee list.");
+    return result.attendees || [];
+  }
+  async function submitName(name, dept, feedbackEl){
+    const local=addLocal(name,dept,false);
+    if(!local.ok){status(feedbackEl,local.reason,"warn");return;}
+    const newAttendee=attendees[attendees.length-1];
+    if(backendUrl && navigator.onLine){
+      try{
+        const result=await registerOnline(name,newAttendee.dept);
+        newAttendee.synced=true; queue=queue.filter(q=>!sameAtt(q,name,dept)); save();
+        status(feedbackEl,result.duplicate?"This name is already registered. No need to register again.":"You're registered! Your name has been added to the attendee list.","ok");
+      }catch(e){
+        queue.push({name,dept:newAttendee.dept,deviceId,createdAt:newAttendee.createdAt}); save();
+        status(feedbackEl,"Saved on this device. It will sync when the connection is available. ("+e.message+")","warn");
+      }
+    }else{
+      queue.push({name,dept:newAttendee.dept,deviceId,createdAt:newAttendee.createdAt}); save();
+      status(feedbackEl,"Saved on this device. It will sync when you're online.","warn");
+    }
+    $("fullName").value=""; resetDept("dept","deptOther"); render();
+  }
+  $("registrationForm").addEventListener("submit",e=>{e.preventDefault();const b=$("submitBtn");b.disabled=true;submitName($("fullName").value,getDept("dept","deptOther"),$("registerStatus")).finally(()=>b.disabled=false);});
+
+  async function syncAll(){
+    if(!backendUrl || !navigator.onLine){render();return;}
+    try{
+      for(const item of [...queue]){
+        const r=await registerOnline(item.name,item.dept||"");
+        if(r.ok){const a=attendees.find(x=>sameAtt(x,item.name,item.dept||""));if(a)a.synced=true;queue=queue.filter(q=>!sameAtt(q,item.name,item.dept||""));}
+      }
+      const remote=await fetchOnline();
+      remote.forEach(r=>{if(!attendees.some(a=>sameAtt(a,r.name,r.dept||"")))attendees.push({id:r.id||"remote-"+keyAtt(r.name,r.dept||""),name:r.name,dept:r.dept||"",createdAt:r.createdAt||"",synced:true});});
+      attendees.forEach(a=>{if(remote.some(r=>sameAtt(a,r.name,r.dept||"")))a.synced=true;});
+      save(); status($("adminStatus"),"Attendee list refreshed. Pending registrations synchronized.","ok");
+    }catch(e){status($("adminStatus"),"Offline or unable to sync. Local registrations are saved on this device. "+e.message,"warn");}
+    render();
+  }
+  const OTHER="__other__";
+  function fillDepts(){["dept","manualDept"].forEach(id=>{const sel=$(id);sel.innerHTML="";const first=document.createElement("option");first.value="";first.textContent="Select department";sel.appendChild(first);DEPARTMENTS.forEach(d=>{const o=document.createElement("option");o.value=d;o.textContent=d;sel.appendChild(o);});const oo=document.createElement("option");oo.value=OTHER;oo.textContent="Others (not listed)";sel.appendChild(oo);});}
+  function canonDept(d){d=cleanName(d);if(!d)return "";const pool=[...DEPARTMENTS,...attendees.map(a=>a.dept).filter(Boolean)];return pool.find(x=>keyName(x)===keyName(d))||d;}
+  function getDept(selId,otherId){const v=$(selId).value;return v===OTHER?canonDept($(otherId).value):v;}
+  function resetDept(selId,otherId){$(selId).value="";$(otherId).value="";$(otherId).classList.add("hidden");$(otherId).required=false;}
+  function bindOther(selId,otherId){$(selId).addEventListener("change",()=>{const on=$(selId).value===OTHER;$(otherId).classList.toggle("hidden",!on);$(otherId).required=on&&selId==="dept";if(on)$(otherId).focus();else $(otherId).value="";});}
+  function render(){
+    const list=$("attendeeList"); $("totalCount").textContent=attendees.length;
+    $("syncedCount").textContent=attendees.filter(a=>a.synced).length;
+    $("pendingCount").textContent=queue.length;
+    if(!attendees.length){list.innerHTML='<div class="empty">No registrations yet.</div>';return;}
+    list.innerHTML="";
+    [...attendees].sort((a,b)=>a.name.localeCompare(b.name)).forEach((a)=>{
+      const row=document.createElement("div");row.className="attendee";
+      const left=document.createElement("div");left.textContent=a.name;
+      const meta=document.createElement("small");meta.textContent=(a.dept?a.dept+" · ":"")+(a.synced?"Synced":"Pending");left.appendChild(document.createElement("br"));left.appendChild(meta);
+      const del=document.createElement("button");del.className="remove";del.textContent="Remove";del.onclick=async()=>{if(!confirm("Remove "+a.name+" from the list?"))return;if(backendUrl){try{await jsonp({action:"delete",name:a.name,dept:a.dept||""});}catch(e){status($("adminStatus"),"Could not remove from the online database ("+e.message+"). Try again when online.","err");return;}}attendees=attendees.filter(x=>x.id!==a.id);queue=queue.filter(x=>!sameAtt(x,a.name,a.dept||""));save();render();};
+      row.append(left,del);list.appendChild(row);
+    });
+  }
+  $("addManual").onclick=()=>{const n=cleanName($("manualName").value),d=getDept("manualDept","manualDeptOther");const r=addLocal(n,d,false);if(!r.ok){status($("adminStatus"),r.reason,"warn");return;}if(backendUrl&&navigator.onLine){registerOnline(n,d).then(()=>{const a=attendees.find(x=>sameAtt(x,n,d));if(a)a.synced=true;save();render();}).catch(()=>{queue.push({name:n,dept:d,deviceId});save();render();});}else{queue.push({name:n,dept:d,deviceId});save();} $("manualName").value="";resetDept("manualDept","manualDeptOther");render();};
+  function namesText(){return attendees.map(a=>a.name).join("\n");}
+  $("copyNames").onclick=async()=>{try{await navigator.clipboard.writeText(namesText());status($("adminStatus"),"Copied "+attendees.length+" names. Paste them into Duck Race Name Picker.","ok");}catch{status($("adminStatus"),"Clipboard access unavailable. Use Download TXT instead.","warn");}};
+  function download(name,content,type){const blob=new Blob([content],{type});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();URL.revokeObjectURL(a.href);}
+  $("downloadTxt").onclick=()=>download("christmas-party-duck-race-names.txt",namesText(),"text/plain;charset=utf-8");
+  $("downloadCsv").onclick=()=>download("christmas-party-attendees.csv","Full Name,Department\n"+attendees.map(a=>'"'+a.name.replace(/"/g,'""')+'","'+(a.dept||"").replace(/"/g,'""')+'"').join("\n"),"text/csv;charset=utf-8");
+  $("refreshBtn").onclick=syncAll;
+  $("saveBackend").onclick=()=>{const value=$("backendUrl").value.trim();if(value&&!value.startsWith("https://script.google.com/")){status($("adminStatus"),"Please enter the deployed Google Apps Script web app URL.","warn");return;}backendUrl=value;localStorage.setItem(URL_KEY,value);status($("adminStatus"),value?"Database URL saved on this device.":"Database URL cleared.","ok");syncAll();};
+  $("testBackend").onclick=async()=>{try{const r=await fetchOnline();status($("adminStatus"),"Connection successful. "+r.length+" names found in the shared database.","ok");}catch(e){status($("adminStatus"),"Connection failed: "+e.message,"err");}};
+  function makeQr(){const el=$("qrcode");el.innerHTML="";if(!window.QRCode){el.textContent="QR generator loads when online.";return;}new QRCode(el,{text:location.href.split("#")[0],width:150,height:150,colorDark:"#102b4e",colorLight:"#ffffff",correctLevel:QRCode.CorrectLevel.M});}
+  $("printQr").onclick=()=>window.print();
+  $("backendUrl").value=backendUrl; fillDepts(); bindOther("dept","deptOther"); bindOther("manualDept","manualDeptOther");
+  window.addEventListener("online",()=>{if(!$("adminView").classList.contains("hidden"))syncAll();});
+  if("serviceWorker" in navigator && location.protocol.startsWith("http"))navigator.serviceWorker.register("./sw.js").catch(()=>{});
+  render();
+})();
+</script>
+</body>
+</html>
