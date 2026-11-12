@@ -19,7 +19,7 @@
 </header>
 <main>
   <div class="card">
-    <nav class="tabs" aria-label="Registration navigation">
+    <nav class="tabs hidden" id="tabsNav" aria-label="Registration navigation">
       <button class="tab active" id="registerTab" type="button">Register</button>
       <button class="tab" id="adminTab" type="button">Attendee List</button>
     </nav>
@@ -87,20 +87,23 @@
   localStorage.setItem(DEVICE_KEY, deviceId);
   let attendees = load(DB_KEY, []);
   let queue = load(QUEUE_KEY, []);
-  const DEFAULT_URL = "https://script.google.com/macros/s/AKfycbwfoL3O1kpnCYbmdRZko72PTYlbhMkJVHNAc3CT8eCgQ8HwAiacIw_exa7-hDFQaOPN/exec";
+  const DEFAULT_URL = "PASTE_YOUR_EXEC_URL_HERE";
   let backendUrl = localStorage.getItem(URL_KEY) || (DEFAULT_URL.startsWith("https://script.google.com/") ? DEFAULT_URL : "");
 
   function load(key, fallback){ try{return JSON.parse(localStorage.getItem(key)) || fallback}catch{return fallback} }
   function save(){ localStorage.setItem(DB_KEY, JSON.stringify(attendees)); localStorage.setItem(QUEUE_KEY, JSON.stringify(queue)); }
   function cleanName(s){ return String(s || "").trim().replace(/\s+/g," "); }
   function keyName(s){ return cleanName(s).toLocaleLowerCase(); }
+  function titleName(n){ if(n!==n.toLowerCase()&&n!==n.toUpperCase()) return n; return n.toLowerCase().replace(/(^|[\s\-'’.])(\p{L})/gu,(m,a,b)=>a+b.toUpperCase()); }
   function keyAtt(n,d){ return keyName(n)+"|"+keyName(d); }
   function sameAtt(a,n,d){ return keyAtt(a.name,a.dept)===keyAtt(n,d); }
   // EDIT THIS LIST: these are the only departments guests can pick (exact spelling is used for duplicate detection)
   const DEPARTMENTS = ["Accounting & Finance", "HR", "IT", "OPS Support", "Quality Management", "Safety Department", "Maintenance & Engineering", "Procurement M&E", "Purchasing", "Commercial", "OCC", "Flight Ops", "Chief Executive Office"];
   function status(el, msg, type="ok"){ el.textContent=msg; el.className="status show "+type; }
   function hideStatus(el){el.className="status";}
-  function setTab(which){
+  function isAdmin(){ return location.hash==="#admin"; }
+  function applyMode(){ $("tabsNav").classList.toggle("hidden",!isAdmin()); if(!isAdmin()) setTab("register"); }
+  function setTab(which){ if(which!=="register"&&!isAdmin()) which="register";
     const reg=which==="register";
     $("registerView").classList.toggle("hidden",!reg); $("adminView").classList.toggle("hidden",reg);
     $("registerTab").classList.toggle("active",reg); $("adminTab").classList.toggle("active",!reg);
@@ -110,7 +113,7 @@
   $("adminTab").onclick=()=>setTab("admin");
 
   function addLocal(name, dept, synced=false, id=null){
-    name=cleanName(name); dept=cleanName(dept); if(!name) return {ok:false,reason:"Enter a name."}; if(!dept) return {ok:false,reason:"Enter a department."};
+    name=titleName(cleanName(name)); dept=cleanName(dept); if(!name) return {ok:false,reason:"Enter a name."}; if(!dept) return {ok:false,reason:"Enter a department."};
     if(attendees.some(a=>sameAtt(a,name,dept))) return {ok:false,reason:"This person is already registered in that department."};
     attendees.push({id:id || (crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random()),name,dept,createdAt:new Date().toISOString(),synced});
     save(); return {ok:true};
@@ -127,8 +130,8 @@
       script.src=u.toString(); document.body.appendChild(script);
     });
   }
-  async function registerOnline(name,dept){
-    const result=await jsonp({action:"register",name,dept,deviceId});
+  async function registerOnline(name,dept,confirmed){
+    const result=await jsonp({action:"register",name,dept,deviceId,confirm:confirmed?"1":"0"});
     if(!result || !result.ok) throw new Error((result&&result.message)||"Registration was not accepted.");
     return result;
   }
@@ -143,26 +146,32 @@
     const newAttendee=attendees[attendees.length-1];
     if(backendUrl && navigator.onLine){
       try{
-        const result=await registerOnline(name,newAttendee.dept);
+        let result=await registerOnline(newAttendee.name,newAttendee.dept,false);
+        if(result.needsConfirm){
+          if(window.confirm("Someone named "+newAttendee.name+" is already registered under: "+(result.depts||[]).join(", ")+".\n\nPress OK only if you are a DIFFERENT person. Press Cancel if you already registered.")){result=await registerOnline(newAttendee.name,newAttendee.dept,true);}
+          else{attendees=attendees.filter(a=>a!==newAttendee);save();status(feedbackEl,"Cancelled. You are already on the list, so there is no need to register again.","warn");$("fullName").value="";resetDept("dept","deptOther");render();return;}
+        }
         newAttendee.synced=true; queue=queue.filter(q=>!sameAtt(q,name,dept)); save();
         status(feedbackEl,result.duplicate?"This name is already registered. No need to register again.":"You're registered! Your name has been added to the attendee list.","ok");
       }catch(e){
-        queue.push({name,dept:newAttendee.dept,deviceId,createdAt:newAttendee.createdAt}); save();
+        queue.push({name:newAttendee.name,dept:newAttendee.dept,deviceId,createdAt:newAttendee.createdAt}); save();
         status(feedbackEl,"Saved on this device. It will sync when the connection is available. ("+e.message+")","warn");
       }
     }else{
-      queue.push({name,dept:newAttendee.dept,deviceId,createdAt:newAttendee.createdAt}); save();
+      queue.push({name:newAttendee.name,dept:newAttendee.dept,deviceId,createdAt:newAttendee.createdAt}); save();
       status(feedbackEl,"Saved on this device. It will sync when you're online.","warn");
     }
     $("fullName").value=""; resetDept("dept","deptOther"); render();
   }
   $("registrationForm").addEventListener("submit",e=>{e.preventDefault();const b=$("submitBtn");b.disabled=true;submitName($("fullName").value,getDept("dept","deptOther"),$("registerStatus")).finally(()=>b.disabled=false);});
 
-  async function syncAll(){
+  let syncing=false;
+  async function syncAll(){ if(syncing) return; syncing=true; try{ await syncCore(); } finally{ syncing=false; } }
+  async function syncCore(){
     if(!backendUrl || !navigator.onLine){render();return;}
     try{
       for(const item of [...queue]){
-        const r=await registerOnline(item.name,item.dept||"");
+        const r=await registerOnline(item.name,item.dept||"",true);
         if(r.ok){const a=attendees.find(x=>sameAtt(x,item.name,item.dept||""));if(a)a.synced=true;queue=queue.filter(q=>!sameAtt(q,item.name,item.dept||""));}
       }
       const remote=await fetchOnline();
@@ -192,7 +201,7 @@
       row.append(left,del);list.appendChild(row);
     });
   }
-  $("addManual").onclick=()=>{const n=cleanName($("manualName").value),d=getDept("manualDept","manualDeptOther");const r=addLocal(n,d,false);if(!r.ok){status($("adminStatus"),r.reason,"warn");return;}if(backendUrl&&navigator.onLine){registerOnline(n,d).then(()=>{const a=attendees.find(x=>sameAtt(x,n,d));if(a)a.synced=true;save();render();}).catch(()=>{queue.push({name:n,dept:d,deviceId});save();render();});}else{queue.push({name:n,dept:d,deviceId});save();} $("manualName").value="";resetDept("manualDept","manualDeptOther");render();};
+  $("addManual").onclick=()=>{const n=titleName(cleanName($("manualName").value)),d=getDept("manualDept","manualDeptOther");const r=addLocal(n,d,false);if(!r.ok){status($("adminStatus"),r.reason,"warn");return;}if(backendUrl&&navigator.onLine){registerOnline(n,d,true).then(()=>{const a=attendees.find(x=>sameAtt(x,n,d));if(a)a.synced=true;save();render();}).catch(()=>{queue.push({name:n,dept:d,deviceId});save();render();});}else{queue.push({name:n,dept:d,deviceId});save();} $("manualName").value="";resetDept("manualDept","manualDeptOther");render();};
   function namesText(){return attendees.map(a=>a.name).join("\n");}
   $("copyNames").onclick=async()=>{try{await navigator.clipboard.writeText(namesText());status($("adminStatus"),"Copied "+attendees.length+" names. Paste them into Duck Race Name Picker.","ok");}catch{status($("adminStatus"),"Clipboard access unavailable. Use Download TXT instead.","warn");}};
   function download(name,content,type){const blob=new Blob([content],{type});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();URL.revokeObjectURL(a.href);}
@@ -203,8 +212,11 @@
   $("testBackend").onclick=async()=>{try{const r=await fetchOnline();status($("adminStatus"),"Connection successful. "+r.length+" names found in the shared database.","ok");}catch(e){status($("adminStatus"),"Connection failed: "+e.message,"err");}};
   function makeQr(){const el=$("qrcode");el.innerHTML="";if(!window.QRCode){el.textContent="QR generator loads when online.";return;}new QRCode(el,{text:location.href.split("#")[0],width:150,height:150,colorDark:"#102b4e",colorLight:"#ffffff",correctLevel:QRCode.CorrectLevel.M});}
   $("printQr").onclick=()=>window.print();
-  $("backendUrl").value=backendUrl; fillDepts(); bindOther("dept","deptOther"); bindOther("manualDept","manualDeptOther");
-  window.addEventListener("online",()=>{if(!$("adminView").classList.contains("hidden"))syncAll();});
+  $("backendUrl").value=backendUrl; fillDepts(); bindOther("dept","deptOther"); bindOther("manualDept","manualDeptOther"); applyMode(); window.addEventListener("hashchange",applyMode);
+  window.addEventListener("online",syncAll);
+  document.addEventListener("visibilitychange",()=>{if(!document.hidden&&queue.length)syncAll();});
+  setInterval(()=>{if(queue.length)syncAll();},30000);
+  if(queue.length) syncAll();
   if("serviceWorker" in navigator && location.protocol.startsWith("http"))navigator.serviceWorker.register("./sw.js").catch(()=>{});
   render();
 })();
