@@ -101,7 +101,7 @@ main {
 }
 
 .tab.active {
-  background:var(--navy);
+  background:#090979;
   color:white;
   border-color:var(--navy);
 }
