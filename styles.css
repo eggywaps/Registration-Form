@@ -356,63 +356,43 @@ button {
   object-fit:contain;
 }
 
-@media(max-width:600px) {
-  main {
-    width:calc(100% - 24px);
-    margin:22px auto 40px;
-  }
+/* ===================== Responsive ===================== */
+/* Layout changes happen only at these breakpoints; everything between them
+   (headings, header logo, card padding, etc.) already scales fluidly. */
 
-  .card {
-    padding:20px;
-  }
-
-  .two {
-    grid-template-columns:1fr;
-    gap:14px;
-  }
-
-  .stats {
-    gap:8px;
-  }
-
-  .stat {
-    padding:12px;
-  }
-
-  .attendee {
-    padding:12px;
-    gap:10px;
-  }
+/* Phones and small tablets: up to 600px */
+@media (max-width:600px) {
+  header { padding:clamp(22px,6vw,28px) 14px; }
+  main { width:calc(100% - 20px); margin:16px auto 36px; }
+  .card { padding:20px; border-radius:18px; }
+  .tabs .tab { flex:1 1 auto; text-align:center; }
+  .two { grid-template-columns:1fr; gap:14px; }
+  .stats { gap:6px; }
+  .stat { padding:10px; }
+  .stat strong { font-size:1.2rem; }
+  .toolbar .secondary { flex:1 1 calc(50% - 10px); }
+  .attendee { padding:12px; gap:10px; font-size:.9rem; }
+  .qr-wrap { justify-content:center; text-align:center; }
 }
-/* Phones in portrait: every common phone width up to 600px */
-@media(max-width:600px){
-  header{padding:28px 14px}
-  main{width:calc(100% - 20px);margin:16px auto 36px}
-  .card{border-radius:18px}
-  .tabs .tab{flex:1 1 auto;text-align:center}
-  .stats{gap:6px}.stat{padding:10px}.stat strong{font-size:1.2rem}
-  .two{grid-template-columns:1fr}
-  .toolbar .secondary{flex:1 1 calc(50% - 9px)}
-  .attendee{font-size:.9rem}
-  .qr-wrap{justify-content:center;text-align:center}
+
+/* Small phones: up to 380px (iPhone SE, Galaxy Fold, compact Androids) */
+@media (max-width:380px) {
+  header { padding:22px 10px 24px; }
+  .eyebrow { letter-spacing:.14em; }
+  .hero-sub { font-size:.72rem; letter-spacing:.06em; }
+  .card { padding:16px; }
+  .stat span { font-size:.66rem; }
+  .toolbar .secondary { flex:1 1 100%; }
 }
-/* Small phones (iPhone SE, Galaxy Fold, compact Androids) */
-@media(max-width:380px){
-  header{padding:22px 10px 28px}
-  header:after{letter-spacing:8px}
-  .eyebrow{letter-spacing:.14em}
-  .hero-sub{font-size:.72rem;letter-spacing:.06em}
-  .card{padding:16px}
-  .stat span{font-size:.66rem}
-  .toolbar .secondary{flex:1 1 100%}
+
+/* Phones held sideways (short and not wide, so desktop windows are unaffected) */
+@media (max-height:500px) and (max-width:950px) and (orientation:landscape) {
+  header { padding:14px 14px 20px; }
+  .hero-title { margin:4px 0; }
+  main { margin:12px auto 24px; }
 }
-/* Phones held sideways */
-@media(max-height:500px) and (max-width:950px) and (orientation:landscape){
-  header{padding:14px 14px 24px}
-  .hero-title{margin:4px 0}
-  main{margin:12px auto 24px}
-}
-/* Any touch screen: comfortable tap targets */
-@media(hover:none) and (pointer:coarse){
-  .tab,.secondary,.primary,.remove,input,select{min-height:44px}
+
+/* Touch screens: comfortable tap targets */
+@media (hover:none) and (pointer:coarse) {
+  .tab, .secondary, .primary, .remove, input, select { min-height:44px; }
 }
