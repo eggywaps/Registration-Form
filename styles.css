@@ -44,7 +44,7 @@ header {
   background: #020024;
   background: radial-gradient(circle, rgba(2, 0, 36, 1) 0%, rgba(9, 9, 121, 1) 81%, rgba(255, 255, 255, 1) 100%);
   color:#fff;
-  text-align:center;
+  text-align:left;
   padding:40px 22px 38px;
   overflow:hidden;
 }
