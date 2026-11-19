@@ -54,7 +54,8 @@ header:after {
   left:0;
   right:0;
   bottom:10px;
-  background: linear-gradient(135deg, #1e3a8a 0%, #cbd5e1 55%, #ffffff 100%);
+  background: #020024;
+  background: radial-gradient(circle, rgba(2, 0, 36, 1) 0%, rgba(9, 9, 121, 1) 35%, rgba(255, 255, 255, 1) 100%);
   letter-spacing:16px;
   font-size:13px;
   opacity:.8;
