@@ -87,8 +87,8 @@
   localStorage.setItem(DEVICE_KEY, deviceId);
   let attendees = load(DB_KEY, []);
   let queue = load(QUEUE_KEY, []);
-  const DEFAULT_URL = "https://script.google.com/macros/s/AKfycbwfoL3O1kpnCYbmdRZko72PTYlbhMkJVHNAc3CT8eCgQ8HwAiacIw_exa7-hDFQaOPN/exec";
-  let backendUrl = localStorage.getItem(URL_KEY) || (DEFAULT_URL.startsWith("https://script.google.com/") ? DEFAULT_URL : "https://script.google.com/macros/s/AKfycbwfoL3O1kpnCYbmdRZko72PTYlbhMkJVHNAc3CT8eCgQ8HwAiacIw_exa7-hDFQaOPN/exec");
+  const DEFAULT_URL = "PASTE_YOUR_EXEC_URL_HERE";
+  let backendUrl = DEFAULT_URL.startsWith("https://script.google.com/") ? DEFAULT_URL : (localStorage.getItem(URL_KEY) || "");
 
   function load(key, fallback){ try{return JSON.parse(localStorage.getItem(key)) || fallback}catch{return fallback} }
   function save(){ localStorage.setItem(DB_KEY, JSON.stringify(attendees)); localStorage.setItem(QUEUE_KEY, JSON.stringify(queue)); }
@@ -175,6 +175,7 @@
         if(r.ok){const a=attendees.find(x=>sameAtt(x,item.name,item.dept||""));if(a)a.synced=true;queue=queue.filter(q=>!sameAtt(q,item.name,item.dept||""));}
       }
       const remote=await fetchOnline();
+      attendees=attendees.filter(a=>!a.synced||remote.some(r=>sameAtt(a,r.name,r.dept||"")));
       remote.forEach(r=>{if(!attendees.some(a=>sameAtt(a,r.name,r.dept||"")))attendees.push({id:r.id||"remote-"+keyAtt(r.name,r.dept||""),name:r.name,dept:r.dept||"",createdAt:r.createdAt||"",synced:true});});
       attendees.forEach(a=>{if(remote.some(r=>sameAtt(a,r.name,r.dept||"")))a.synced=true;});
       save(); status($("adminStatus"),"Attendee list refreshed. Pending registrations synchronized.","ok");
