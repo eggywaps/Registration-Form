@@ -1,5 +1,5 @@
-const CACHE = "winter-party-v2";
-const SHELL = ["./", "./index.html", "./styles.css", "./manifest.webmanifest", "./icon.svg"];
+const CACHE = "winter-party-v3";
+const SHELL = ["./", "./index.html", "./styles.css", "./manifest.webmanifest", "./icon.svg", "./rw-logo-white.png"];
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)));
   self.skipWaiting();
