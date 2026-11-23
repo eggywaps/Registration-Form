@@ -82,148 +82,420 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 (() => {
+  "use strict";
+
+  /* =====================================================================
+     1. SETTINGS  (the only part you normally need to edit)
+     ===================================================================== */
+  const CONFIG = {
+    // Google Apps Script web app address (ends in /exec). Built in, so every device uses it.
+    defaultUrl: "https://script.google.com/macros/s/AKfycbwfoL3O1kpnCYbmdRZko72PTYlbhMkJVHNAc3CT8eCgQ8HwAiacIw_exa7-hDFQaOPN/exec",
+
+    // Departments guests can pick. Exact spelling is used for duplicate detection.
+    departments: [
+      "Accounting & Finance", "HR", "IT", "OPS Support", "Quality Management",
+      "Safety Department", "Maintenance & Engineering", "Procurement M&E",
+      "Purchasing", "Commercial", "OCC", "Flight Ops", "Chief Executive Office"
+    ],
+
+    otherValue: "__other__",     // value of the "Others (not listed)" option
+    jsonpTimeoutMs: 12000,       // give up on the database after 12 s
+    autoSyncMs: 30000,           // retry waiting names every 30 s
+
+    storage: {                   // browser storage keys
+      attendees: "winterPartyAttendees_v1",
+      queue:     "winterPartyQueue_v1",
+      device:    "winterPartyDevice_v1",
+      url:       "winterPartyBackendUrl_v1"
+    }
+  };
+
+  /* =====================================================================
+     2. HELPERS
+     ===================================================================== */
   const $ = id => document.getElementById(id);
-  const DB_KEY = "winterPartyAttendees_v1";
-  const QUEUE_KEY = "winterPartyQueue_v1";
-  const DEVICE_KEY = "winterPartyDevice_v1";
-  const URL_KEY = "winterPartyBackendUrl_v1";
-  const deviceId = localStorage.getItem(DEVICE_KEY) || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
-  localStorage.setItem(DEVICE_KEY, deviceId);
-  let attendees = load(DB_KEY, []);
-  let queue = load(QUEUE_KEY, []);
-  const DEFAULT_URL = "https://script.google.com/macros/s/AKfycbwfoL3O1kpnCYbmdRZko72PTYlbhMkJVHNAc3CT8eCgQ8HwAiacIw_exa7-hDFQaOPN/exec";
-  let backendUrl = DEFAULT_URL.startsWith("https://script.google.com/") ? DEFAULT_URL : (localStorage.getItem(URL_KEY) || "");
+  const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
+  const cleanName = s => String(s || "").trim().replace(/\s+/g, " ");
+  const keyName = s => cleanName(s).toLocaleLowerCase();
+  const keyAtt = (name, dept) => keyName(name) + "|" + keyName(dept);        // duplicate key = name + department
+  const sameAtt = (a, name, dept) => keyAtt(a.name, a.dept) === keyAtt(name, dept);
 
-  function load(key, fallback){ try{return JSON.parse(localStorage.getItem(key)) || fallback}catch{return fallback} }
-  function save(){ localStorage.setItem(DB_KEY, JSON.stringify(attendees)); localStorage.setItem(QUEUE_KEY, JSON.stringify(queue)); }
-  function cleanName(s){ return String(s || "").trim().replace(/\s+/g," "); }
-  function keyName(s){ return cleanName(s).toLocaleLowerCase(); }
-  function titleName(n){ if(n!==n.toLowerCase()&&n!==n.toUpperCase()) return n; return n.toLowerCase().replace(/(^|[\s\-'’.])(\p{L})/gu,(m,a,b)=>a+b.toUpperCase()); }
-  function keyAtt(n,d){ return keyName(n)+"|"+keyName(d); }
-  function sameAtt(a,n,d){ return keyAtt(a.name,a.dept)===keyAtt(n,d); }
-  // EDIT THIS LIST: these are the only departments guests can pick (exact spelling is used for duplicate detection)
-  const DEPARTMENTS = ["Accounting & Finance", "HR", "IT", "OPS Support", "Quality Management", "Safety Department", "Maintenance & Engineering", "Procurement M&E", "Purchasing", "Commercial", "OCC", "Flight Ops", "Chief Executive Office"];
-  function status(el, msg, type="ok"){ el.textContent=msg; el.className="status show "+type; }
-  function hideStatus(el){el.className="status";}
-  function isAdmin(){ return location.hash==="#admin"; }
-  function applyMode(){ $("tabsNav").classList.toggle("hidden",!isAdmin()); if(!isAdmin()) setTab("register"); }
-  function setTab(which){ if(which!=="register"&&!isAdmin()) which="register";
-    const reg=which==="register";
-    $("registerView").classList.toggle("hidden",!reg); $("adminView").classList.toggle("hidden",reg);
-    $("registerTab").classList.toggle("active",reg); $("adminTab").classList.toggle("active",!reg);
-    if(!reg){render(); makeQr(); syncAll();}
+  // "juan dela cruz" / "JUAN DELA CRUZ" -> "Juan Dela Cruz"; mixed case such as "McDonald" is kept
+  function titleName(n) {
+    if (n !== n.toLowerCase() && n !== n.toUpperCase()) return n;
+    return n.toLowerCase().replace(/(^|[\s\-'’.])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
   }
-  $("registerTab").onclick=()=>setTab("register");
-  $("adminTab").onclick=()=>setTab("admin");
 
-  function addLocal(name, dept, synced=false, id=null){
-    name=titleName(cleanName(name)); dept=cleanName(dept); if(!name) return {ok:false,reason:"Enter a name."}; if(!dept) return {ok:false,reason:"Enter a department."};
-    if(attendees.some(a=>sameAtt(a,name,dept))) return {ok:false,reason:"This person is already registered in that department."};
-    attendees.push({id:id || (crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random()),name,dept,createdAt:new Date().toISOString(),synced});
-    save(); return {ok:true};
+  function load(key, fallback) {
+    try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch { return fallback; }
   }
-  function jsonp(params, timeout=12000){
-    return new Promise((resolve,reject)=>{
-      if(!backendUrl){reject(new Error("No online database URL configured."));return;}
-      const cb="partyCb_"+Math.random().toString(36).slice(2);
-      const script=document.createElement("script"); const timer=setTimeout(()=>finish(new Error("Connection timed out.")),timeout);
-      function finish(err,data){clearTimeout(timer);delete window[cb];script.remove();err?reject(err):resolve(data);}
-      window[cb]=data=>finish(null,data);
-      const u=new URL(backendUrl); Object.entries({...params,callback:cb}).forEach(([k,v])=>u.searchParams.set(k,v));
-      script.onerror=()=>finish(new Error("Could not reach the online database."));
-      script.src=u.toString(); document.body.appendChild(script);
+
+  function showStatus(el, msg, type = "ok") {
+    el.textContent = msg;
+    el.className = "status show " + type;
+  }
+
+  /* =====================================================================
+     3. STATE  (saved in this browser)
+     ===================================================================== */
+  const KEYS = CONFIG.storage;
+  const deviceId = localStorage.getItem(KEYS.device) || uuid();
+  localStorage.setItem(KEYS.device, deviceId);
+
+  let attendees = load(KEYS.attendees, []);   // everyone this device knows about
+  let queue = load(KEYS.queue, []);           // names still waiting to reach the Sheet
+  let backendUrl = CONFIG.defaultUrl.startsWith("https://script.google.com/")
+    ? CONFIG.defaultUrl
+    : (localStorage.getItem(KEYS.url) || "");
+
+  function saveState() {
+    localStorage.setItem(KEYS.attendees, JSON.stringify(attendees));
+    localStorage.setItem(KEYS.queue, JSON.stringify(queue));
+  }
+  function queueAdd(a) {
+    queue.push({ name: a.name, dept: a.dept, deviceId, createdAt: a.createdAt || new Date().toISOString() });
+    saveState();
+  }
+  function queueRemove(name, dept) {
+    queue = queue.filter(q => !sameAtt(q, name, dept || ""));
+  }
+
+  /* =====================================================================
+     4. DATABASE (Google Apps Script, JSONP)
+     ===================================================================== */
+  function jsonp(params, timeout = CONFIG.jsonpTimeoutMs) {
+    return new Promise((resolve, reject) => {
+      if (!backendUrl) { reject(new Error("No online database URL configured.")); return; }
+      const cb = "partyCb_" + Math.random().toString(36).slice(2);
+      const script = document.createElement("script");
+      const timer = setTimeout(() => finish(new Error("Connection timed out.")), timeout);
+      function finish(err, data) {
+        clearTimeout(timer); delete window[cb]; script.remove();
+        err ? reject(err) : resolve(data);
+      }
+      window[cb] = data => finish(null, data);
+      const u = new URL(backendUrl);
+      Object.entries({ ...params, callback: cb }).forEach(([k, v]) => u.searchParams.set(k, v));
+      script.onerror = () => finish(new Error("Could not reach the online database."));
+      script.src = u.toString();
+      document.body.appendChild(script);
     });
   }
-  async function registerOnline(name,dept,confirmed){
-    const result=await jsonp({action:"register",name,dept,deviceId,confirm:confirmed?"1":"0"});
-    if(!result || !result.ok) throw new Error((result&&result.message)||"Registration was not accepted.");
+
+  async function registerOnline(name, dept, confirmed) {
+    const result = await jsonp({ action: "register", name, dept, deviceId, confirm: confirmed ? "1" : "0" });
+    if (!result || !result.ok) throw new Error((result && result.message) || "Registration was not accepted.");
     return result;
   }
-  async function fetchOnline(){
-    const result=await jsonp({action:"list"});
-    if(!result || !result.ok) throw new Error((result&&result.message)||"Could not load attendee list.");
+  async function fetchOnline() {
+    const result = await jsonp({ action: "list" });
+    if (!result || !result.ok) throw new Error((result && result.message) || "Could not load attendee list.");
     return result.attendees || [];
   }
-  async function submitName(name, dept, feedbackEl){
-    const local=addLocal(name,dept,false);
-    if(!local.ok){status(feedbackEl,local.reason,"warn");return;}
-    const newAttendee=attendees[attendees.length-1];
-    if(backendUrl && navigator.onLine){
-      try{
-        let result=await registerOnline(newAttendee.name,newAttendee.dept,false);
-        if(result.needsConfirm){
-          if(window.confirm("Someone named "+newAttendee.name+" is already registered under: "+(result.depts||[]).join(", ")+".\n\nPress OK only if you are a DIFFERENT person. Press Cancel if you already registered.")){result=await registerOnline(newAttendee.name,newAttendee.dept,true);}
-          else{attendees=attendees.filter(a=>a!==newAttendee);save();status(feedbackEl,"Cancelled. You are already on the list, so there is no need to register again.","warn");$("fullName").value="";resetDept("dept","deptOther");render();return;}
-        }
-        newAttendee.synced=true; queue=queue.filter(q=>!sameAtt(q,name,dept)); save();
-        status(feedbackEl,result.duplicate?"This name is already registered. No need to register again.":"You're registered! Your name has been added to the attendee list.","ok");
-      }catch(e){
-        queue.push({name:newAttendee.name,dept:newAttendee.dept,deviceId,createdAt:newAttendee.createdAt}); save();
-        status(feedbackEl,"Saved on this device. It will sync when the connection is available. ("+e.message+")","warn");
-      }
-    }else{
-      queue.push({name:newAttendee.name,dept:newAttendee.dept,deviceId,createdAt:newAttendee.createdAt}); save();
-      status(feedbackEl,"Saved on this device. It will sync when you're online.","warn");
-    }
-    $("fullName").value=""; resetDept("dept","deptOther"); render();
-  }
-  $("registrationForm").addEventListener("submit",e=>{e.preventDefault();const b=$("submitBtn");b.disabled=true;submitName($("fullName").value,getDept("dept","deptOther"),$("registerStatus")).finally(()=>b.disabled=false);});
+  const deleteOnline = (name, dept) => jsonp({ action: "delete", name, dept: dept || "" });
 
-  let syncing=false;
-  async function syncAll(){ if(syncing) return; syncing=true; try{ await syncCore(); } finally{ syncing=false; } }
-  async function syncCore(){
-    if(!backendUrl || !navigator.onLine){render();return;}
-    try{
-      for(const item of [...queue]){
-        const r=await registerOnline(item.name,item.dept||"",true);
-        if(r.ok){const a=attendees.find(x=>sameAtt(x,item.name,item.dept||""));if(a)a.synced=true;queue=queue.filter(q=>!sameAtt(q,item.name,item.dept||""));}
+  /* =====================================================================
+     5. LOCAL LIST
+     ===================================================================== */
+  function addLocal(name, dept, synced = false) {
+    name = titleName(cleanName(name));
+    dept = cleanName(dept);
+    if (!name) return { ok: false, reason: "Enter a name." };
+    if (!dept) return { ok: false, reason: "Enter a department." };
+    if (attendees.some(a => sameAtt(a, name, dept))) {
+      return { ok: false, reason: "This person is already registered in that department." };
+    }
+    attendees.push({ id: uuid(), name, dept, createdAt: new Date().toISOString(), synced });
+    saveState();
+    return { ok: true };
+  }
+
+  async function removeAttendee(a) {
+    if (!confirm("Remove " + a.name + " from the list?")) return;
+    if (backendUrl) {
+      try { await deleteOnline(a.name, a.dept); }
+      catch (e) { showStatus($("adminStatus"), "Could not remove from the online database (" + e.message + "). Try again when online.", "err"); return; }
+    }
+    attendees = attendees.filter(x => x.id !== a.id);
+    queueRemove(a.name, a.dept);
+    saveState(); render();
+  }
+
+  /* =====================================================================
+     6. SYNC  (the Sheet is the source of truth)
+     ===================================================================== */
+  let syncing = false;
+  async function syncAll() {
+    if (syncing) return;
+    syncing = true;
+    try { await syncCore(); } finally { syncing = false; }
+  }
+
+  async function syncCore() {
+    if (!backendUrl || !navigator.onLine) { render(); return; }
+    try {
+      // 1) upload names waiting on this device
+      for (const item of [...queue]) {
+        const r = await registerOnline(item.name, item.dept || "", true);
+        if (r.ok) {
+          const a = attendees.find(x => sameAtt(x, item.name, item.dept || ""));
+          if (a) a.synced = true;
+          queueRemove(item.name, item.dept);
+        }
       }
-      const remote=await fetchOnline();
-      attendees=attendees.filter(a=>!a.synced||remote.some(r=>sameAtt(a,r.name,r.dept||"")));
-      remote.forEach(r=>{if(!attendees.some(a=>sameAtt(a,r.name,r.dept||"")))attendees.push({id:r.id||"remote-"+keyAtt(r.name,r.dept||""),name:r.name,dept:r.dept||"",createdAt:r.createdAt||"",synced:true});});
-      attendees.forEach(a=>{if(remote.some(r=>sameAtt(a,r.name,r.dept||"")))a.synced=true;});
-      save(); status($("adminStatus"),"Attendee list refreshed. Pending registrations synchronized.","ok");
-    }catch(e){status($("adminStatus"),"Offline or unable to sync. Local registrations are saved on this device. "+e.message,"warn");}
+      // 2) download the shared list and make this device match it
+      const remote = await fetchOnline();
+      const inRemote = a => remote.some(r => sameAtt(a, r.name, r.dept || ""));
+      attendees = attendees.filter(a => !a.synced || inRemote(a));          // drop names deleted elsewhere
+      remote.forEach(r => {
+        if (!attendees.some(a => sameAtt(a, r.name, r.dept || ""))) {
+          attendees.push({ id: r.id || "remote-" + keyAtt(r.name, r.dept || ""), name: r.name, dept: r.dept || "", createdAt: r.createdAt || "", synced: true });
+        }
+      });
+      attendees.forEach(a => { if (inRemote(a)) a.synced = true; });
+      saveState();
+      showStatus($("adminStatus"), "Attendee list refreshed. Pending registrations synchronized.", "ok");
+    } catch (e) {
+      showStatus($("adminStatus"), "Offline or unable to sync. Local registrations are saved on this device. " + e.message, "warn");
+    }
     render();
   }
-  const OTHER="__other__";
-  function fillDepts(){["dept","manualDept"].forEach(id=>{const sel=$(id);sel.innerHTML="";const first=document.createElement("option");first.value="";first.textContent="Select department";sel.appendChild(first);DEPARTMENTS.forEach(d=>{const o=document.createElement("option");o.value=d;o.textContent=d;sel.appendChild(o);});const oo=document.createElement("option");oo.value=OTHER;oo.textContent="Others (not listed)";sel.appendChild(oo);});}
-  function canonDept(d){d=cleanName(d);if(!d)return "";const pool=[...DEPARTMENTS,...attendees.map(a=>a.dept).filter(Boolean)];return pool.find(x=>keyName(x)===keyName(d))||d;}
-  function getDept(selId,otherId){const v=$(selId).value;return v===OTHER?canonDept($(otherId).value):v;}
-  function resetDept(selId,otherId){$(selId).value="";$(otherId).value="";$(otherId).classList.add("hidden");$(otherId).required=false;}
-  function bindOther(selId,otherId){$(selId).addEventListener("change",()=>{const on=$(selId).value===OTHER;$(otherId).classList.toggle("hidden",!on);$(otherId).required=on&&selId==="dept";if(on)$(otherId).focus();else $(otherId).value="";});}
-  function render(){
-    const list=$("attendeeList"); $("totalCount").textContent=attendees.length;
-    $("syncedCount").textContent=attendees.filter(a=>a.synced).length;
-    $("pendingCount").textContent=queue.length;
-    if(!attendees.length){list.innerHTML='<div class="empty">No registrations yet.</div>';return;}
-    list.innerHTML="";
-    [...attendees].sort((a,b)=>a.name.localeCompare(b.name)).forEach((a)=>{
-      const row=document.createElement("div");row.className="attendee";
-      const left=document.createElement("div");left.textContent=a.name;
-      const meta=document.createElement("small");meta.textContent=(a.dept?a.dept+" · ":"")+(a.synced?"Synced":"Pending");left.appendChild(document.createElement("br"));left.appendChild(meta);
-      const del=document.createElement("button");del.className="remove";del.textContent="Remove";del.onclick=async()=>{if(!confirm("Remove "+a.name+" from the list?"))return;if(backendUrl){try{await jsonp({action:"delete",name:a.name,dept:a.dept||""});}catch(e){status($("adminStatus"),"Could not remove from the online database ("+e.message+"). Try again when online.","err");return;}}attendees=attendees.filter(x=>x.id!==a.id);queue=queue.filter(x=>!sameAtt(x,a.name,a.dept||""));save();render();};
-      row.append(left,del);list.appendChild(row);
+
+  /* =====================================================================
+     7. DEPARTMENT DROPDOWNS  (+ the "Others" text box)
+     ===================================================================== */
+  function fillDepartments() {
+    ["dept", "manualDept"].forEach(id => {
+      const sel = $(id);
+      sel.innerHTML = "";
+      const add = (value, text) => { const o = document.createElement("option"); o.value = value; o.textContent = text; sel.appendChild(o); };
+      add("", "Select department");
+      CONFIG.departments.forEach(d => add(d, d));
+      add(CONFIG.otherValue, "Others (not listed)");
     });
   }
-  $("addManual").onclick=()=>{const n=titleName(cleanName($("manualName").value)),d=getDept("manualDept","manualDeptOther");const r=addLocal(n,d,false);if(!r.ok){status($("adminStatus"),r.reason,"warn");return;}if(backendUrl&&navigator.onLine){registerOnline(n,d,true).then(()=>{const a=attendees.find(x=>sameAtt(x,n,d));if(a)a.synced=true;save();render();}).catch(()=>{queue.push({name:n,dept:d,deviceId});save();render();});}else{queue.push({name:n,dept:d,deviceId});save();} $("manualName").value="";resetDept("manualDept","manualDeptOther");render();};
-  function namesText(){return attendees.map(a=>a.name).join("\n");}
-  $("copyNames").onclick=async()=>{try{await navigator.clipboard.writeText(namesText());status($("adminStatus"),"Copied "+attendees.length+" names. Paste them into Duck Race Name Picker.","ok");}catch{status($("adminStatus"),"Clipboard access unavailable. Use Download TXT instead.","warn");}};
-  function download(name,content,type){const blob=new Blob([content],{type});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();URL.revokeObjectURL(a.href);}
-  $("downloadTxt").onclick=()=>download("christmas-party-duck-race-names.txt",namesText(),"text/plain;charset=utf-8");
-  $("downloadCsv").onclick=()=>download("christmas-party-attendees.csv","Full Name,Department\n"+attendees.map(a=>'"'+a.name.replace(/"/g,'""')+'","'+(a.dept||"").replace(/"/g,'""')+'"').join("\n"),"text/csv;charset=utf-8");
-  $("refreshBtn").onclick=syncAll;
-  $("saveBackend").onclick=()=>{const value=$("backendUrl").value.trim();if(value&&!value.startsWith("https://script.google.com/")){status($("adminStatus"),"Please enter the deployed Google Apps Script web app URL.","warn");return;}backendUrl=value;localStorage.setItem(URL_KEY,value);status($("adminStatus"),value?"Database URL saved on this device.":"Database URL cleared.","ok");syncAll();};
-  $("testBackend").onclick=async()=>{try{const r=await fetchOnline();status($("adminStatus"),"Connection successful. "+r.length+" names found in the shared database.","ok");}catch(e){status($("adminStatus"),"Connection failed: "+e.message,"err");}};
-  function makeQr(){const el=$("qrcode");el.innerHTML="";if(!window.QRCode){el.textContent="QR generator loads when online.";return;}new QRCode(el,{text:location.href.split("#")[0],width:150,height:150,colorDark:"#102b4e",colorLight:"#ffffff",correctLevel:QRCode.CorrectLevel.M});}
-  $("printQr").onclick=()=>window.print();
-  $("backendUrl").value=backendUrl; fillDepts(); bindOther("dept","deptOther"); bindOther("manualDept","manualDeptOther"); applyMode(); window.addEventListener("hashchange",applyMode);
-  window.addEventListener("online",syncAll);
-  document.addEventListener("visibilitychange",()=>{if(!document.hidden&&queue.length)syncAll();});
-  setInterval(()=>{if(queue.length)syncAll();},30000);
-  if(queue.length) syncAll();
-  if("serviceWorker" in navigator && location.protocol.startsWith("http"))navigator.serviceWorker.register("./sw.js").catch(()=>{});
-  render();
+
+  // typed "Others" text is matched to an existing spelling so duplicates are still caught
+  function canonDept(d) {
+    d = cleanName(d);
+    if (!d) return "";
+    const known = [...CONFIG.departments, ...attendees.map(a => a.dept).filter(Boolean)];
+    return known.find(x => keyName(x) === keyName(d)) || d;
+  }
+  function getDept(selectId, otherId) {
+    const v = $(selectId).value;
+    return v === CONFIG.otherValue ? canonDept($(otherId).value) : v;
+  }
+  function resetDept(selectId, otherId) {
+    $(selectId).value = "";
+    $(otherId).value = "";
+    $(otherId).classList.add("hidden");
+    $(otherId).required = false;
+  }
+  function bindOther(selectId, otherId) {
+    $(selectId).addEventListener("change", () => {
+      const on = $(selectId).value === CONFIG.otherValue;
+      $(otherId).classList.toggle("hidden", !on);
+      $(otherId).required = on && selectId === "dept";
+      if (on) $(otherId).focus(); else $(otherId).value = "";
+    });
+  }
+
+  /* =====================================================================
+     8. SCREEN RENDERING
+     ===================================================================== */
+  function render() {
+    $("totalCount").textContent = attendees.length;
+    $("syncedCount").textContent = attendees.filter(a => a.synced).length;
+    $("pendingCount").textContent = queue.length;
+
+    const list = $("attendeeList");
+    if (!attendees.length) { list.innerHTML = '<div class="empty">No registrations yet.</div>'; return; }
+    list.innerHTML = "";
+    [...attendees].sort((a, b) => a.name.localeCompare(b.name)).forEach(a => {
+      const row = document.createElement("div"); row.className = "attendee";
+      const left = document.createElement("div"); left.textContent = a.name;
+      const meta = document.createElement("small");
+      meta.textContent = (a.dept ? a.dept + " · " : "") + (a.synced ? "Synced" : "Pending");
+      left.append(document.createElement("br"), meta);
+      const del = document.createElement("button"); del.className = "remove"; del.textContent = "Remove";
+      del.onclick = () => removeAttendee(a);
+      row.append(left, del);
+      list.appendChild(row);
+    });
+  }
+
+  function makeQr() {
+    const el = $("qrcode");
+    el.innerHTML = "";
+    if (!window.QRCode) { el.textContent = "QR generator loads when online."; return; }
+    new QRCode(el, { text: location.href.split("#")[0], width: 150, height: 150, colorDark: "#102b4e", colorLight: "#ffffff", correctLevel: QRCode.CorrectLevel.M });
+  }
+
+  /* =====================================================================
+     9. REGISTRATION FORM
+     ===================================================================== */
+  async function submitName(name, dept, feedbackEl) {
+    const local = addLocal(name, dept, false);
+    if (!local.ok) { showStatus(feedbackEl, local.reason, "warn"); return; }
+    const me = attendees[attendees.length - 1];
+
+    if (backendUrl && navigator.onLine) {
+      try {
+        let result = await registerOnline(me.name, me.dept, false);
+        if (result.needsConfirm) {        // same name already exists in another department
+          const msg = "Someone named " + me.name + " is already registered under: " + (result.depts || []).join(", ") +
+            ".\n\nPress OK only if you are a DIFFERENT person. Press Cancel if you already registered.";
+          if (window.confirm(msg)) {
+            result = await registerOnline(me.name, me.dept, true);
+          } else {
+            attendees = attendees.filter(a => a !== me); saveState();
+            showStatus(feedbackEl, "Cancelled. You are already on the list, so there is no need to register again.", "warn");
+            $("fullName").value = ""; resetDept("dept", "deptOther"); render();
+            return;
+          }
+        }
+        me.synced = true; queueRemove(me.name, me.dept); saveState();
+        showStatus(feedbackEl, result.duplicate
+          ? "This name is already registered. No need to register again."
+          : "You're registered! Your name has been added to the attendee list.", "ok");
+      } catch (e) {
+        queueAdd(me);
+        showStatus(feedbackEl, "Saved on this device. It will sync when the connection is available. (" + e.message + ")", "warn");
+      }
+    } else {
+      queueAdd(me);
+      showStatus(feedbackEl, "Saved on this device. It will sync when you're online.", "warn");
+    }
+    $("fullName").value = ""; resetDept("dept", "deptOther"); render();
+  }
+
+  /* =====================================================================
+     10. ADMIN ACTIONS  (open the site with /#admin)
+     ===================================================================== */
+  const namesText = () => attendees.map(a => a.name).join("\n");
+
+  function download(filename, content, type) {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([content], { type }));
+    a.download = filename; a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  function addManual() {
+    const name = titleName(cleanName($("manualName").value));
+    const dept = getDept("manualDept", "manualDeptOther");
+    const r = addLocal(name, dept, false);
+    if (!r.ok) { showStatus($("adminStatus"), r.reason, "warn"); return; }
+    const me = attendees[attendees.length - 1];
+    if (backendUrl && navigator.onLine) {
+      registerOnline(me.name, me.dept, true)
+        .then(() => { me.synced = true; saveState(); render(); })
+        .catch(() => { queueAdd(me); render(); });
+    } else {
+      queueAdd(me);
+    }
+    $("manualName").value = ""; resetDept("manualDept", "manualDeptOther"); render();
+  }
+
+  async function copyNames() {
+    try {
+      await navigator.clipboard.writeText(namesText());
+      showStatus($("adminStatus"), "Copied " + attendees.length + " names. Paste them into Duck Race Name Picker.", "ok");
+    } catch {
+      showStatus($("adminStatus"), "Clipboard access unavailable. Use Download TXT instead.", "warn");
+    }
+  }
+
+  function downloadCsv() {
+    const q = s => '"' + String(s || "").replace(/"/g, '""') + '"';
+    download("christmas-party-attendees.csv", "Full Name,Department\n" + attendees.map(a => q(a.name) + "," + q(a.dept)).join("\n"), "text/csv;charset=utf-8");
+  }
+
+  function saveBackendUrl() {
+    const value = $("backendUrl").value.trim();
+    if (value && !value.startsWith("https://script.google.com/")) {
+      showStatus($("adminStatus"), "Please enter the deployed Google Apps Script web app URL.", "warn"); return;
+    }
+    backendUrl = value;
+    localStorage.setItem(KEYS.url, value);
+    showStatus($("adminStatus"), value ? "Database URL saved on this device." : "Database URL cleared.", "ok");
+    syncAll();
+  }
+
+  async function testBackend() {
+    try {
+      const r = await fetchOnline();
+      showStatus($("adminStatus"), "Connection successful. " + r.length + " names found in the shared database.", "ok");
+    } catch (e) {
+      showStatus($("adminStatus"), "Connection failed: " + e.message, "err");
+    }
+  }
+
+  /* =====================================================================
+     11. NAVIGATION  (guests only see the form; /#admin shows the tabs)
+     ===================================================================== */
+  const isAdmin = () => location.hash === "#admin";
+
+  function setTab(which) {
+    if (which !== "register" && !isAdmin()) which = "register";
+    const reg = which === "register";
+    $("registerView").classList.toggle("hidden", !reg);
+    $("adminView").classList.toggle("hidden", reg);
+    $("registerTab").classList.toggle("active", reg);
+    $("adminTab").classList.toggle("active", !reg);
+    if (!reg) { render(); makeQr(); syncAll(); }
+  }
+
+  function applyMode() {
+    $("tabsNav").classList.toggle("hidden", !isAdmin());
+    if (!isAdmin()) setTab("register");
+  }
+
+  /* =====================================================================
+     12. START-UP
+     ===================================================================== */
+  function wireEvents() {
+    $("registerTab").onclick = () => setTab("register");
+    $("adminTab").onclick = () => setTab("admin");
+
+    $("registrationForm").addEventListener("submit", e => {
+      e.preventDefault();
+      const btn = $("submitBtn");
+      btn.disabled = true;
+      submitName($("fullName").value, getDept("dept", "deptOther"), $("registerStatus")).finally(() => { btn.disabled = false; });
+    });
+
+    $("addManual").onclick = addManual;
+    $("copyNames").onclick = copyNames;
+    $("downloadTxt").onclick = () => download("christmas-party-duck-race-names.txt", namesText(), "text/plain;charset=utf-8");
+    $("downloadCsv").onclick = downloadCsv;
+    $("refreshBtn").onclick = syncAll;
+    $("saveBackend").onclick = saveBackendUrl;
+    $("testBackend").onclick = testBackend;
+    $("printQr").onclick = () => window.print();
+
+    bindOther("dept", "deptOther");
+    bindOther("manualDept", "manualDeptOther");
+    window.addEventListener("hashchange", applyMode);
+    window.addEventListener("online", syncAll);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden && queue.length) syncAll(); });
+    setInterval(() => { if (queue.length) syncAll(); }, CONFIG.autoSyncMs);
+  }
+
+  function init() {
+    $("backendUrl").value = backendUrl;
+    fillDepartments();
+    wireEvents();
+    applyMode();
+    render();
+    if (queue.length) syncAll();
+    if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+      navigator.serviceWorker.register("./sw.js").catch(() => {});
+    }
+  }
+
+  init();
 })();
 </script>
 </body>
