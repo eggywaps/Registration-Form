@@ -1,7 +1,8 @@
-const CACHE = "winter-party-v3";
-const SHELL = ["./", "./index.html", "./styles.css", "./manifest.webmanifest", "./icon.svg", "./rw-logo-white.png"];
+const CACHE = "winter-party-v4";
+const SHELL = ["./", "./index.html", "./styles.css", "./manifest.webmanifest", "./icon.svg", "./NEW RW LOGO WHITE - HORIZONTAL.png"];
 self.addEventListener("install", event => {
-  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)));
+  // add files one by one so a single missing file cannot stop the whole install
+  event.waitUntil(caches.open(CACHE).then(cache => Promise.all(SHELL.map(url => cache.add(url).catch(() => {})))));
   self.skipWaiting();
 });
 self.addEventListener("activate", event => {
