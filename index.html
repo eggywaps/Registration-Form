@@ -79,6 +79,19 @@
   <div class="footer">Made for a wonderful winter celebration ✦ Merry Christmas!</div>
 </main>
 
+<div class="modal" id="successModal" role="dialog" aria-modal="true" aria-labelledby="successTitle" aria-hidden="true">
+  <div class="modal-box">
+    <div class="modal-icon">
+      <svg viewBox="0 0 52 52" aria-hidden="true"><circle class="ring" cx="26" cy="26" r="24"/><path class="tick" d="M15 27l8 8 14-16"/><path class="cross" d="M18 18l16 16M34 18L18 34"/><path class="bang" d="M26 15v14M26 37v.5"/></svg>
+    </div>
+    <h3 id="successTitle">You're registered!</h3>
+    <p class="modal-name" id="successName"></p>
+    <p class="modal-text" id="successText"></p>
+    <button class="primary" id="successClose" type="button">Done</button>
+    <div class="modal-timer" aria-hidden="true"><span></span></div>
+  </div>
+</div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 (() => {
@@ -184,7 +197,11 @@
 
   async function registerOnline(name, dept, confirmed) {
     const result = await jsonp({ action: "register", name, dept, deviceId, confirm: confirmed ? "1" : "0" });
-    if (!result || !result.ok) throw new Error((result && result.message) || "Registration was not accepted.");
+    if (!result || !result.ok) {
+      const err = new Error((result && result.message) || "The database did not accept this registration.");
+      err.rejected = true;                 // the database answered "no" (not a connection problem)
+      throw err;
+    }
     return result;
   }
   async function fetchOnline() {
@@ -200,10 +217,10 @@
   function addLocal(name, dept, synced = false) {
     name = titleName(cleanName(name));
     dept = cleanName(dept);
-    if (!name) return { ok: false, reason: "Enter a name." };
-    if (!dept) return { ok: false, reason: "Enter a department." };
+    if (!name) return { ok: false, code: "name", reason: "Enter a name." };
+    if (!dept) return { ok: false, code: "dept", reason: "Enter a department." };
     if (attendees.some(a => sameAtt(a, name, dept))) {
-      return { ok: false, reason: "This person is already registered in that department." };
+      return { ok: false, code: "duplicate", reason: "This person is already registered in that department." };
     }
     attendees.push({ id: uuid(), name, dept, createdAt: new Date().toISOString(), synced });
     saveState();
@@ -236,12 +253,15 @@
     try {
       // 1) upload names waiting on this device
       for (const item of [...queue]) {
-        const r = await registerOnline(item.name, item.dept || "", true);
-        if (r.ok) {
+        try {
+          await registerOnline(item.name, item.dept || "", true);
           const a = attendees.find(x => sameAtt(x, item.name, item.dept || ""));
           if (a) a.synced = true;
-          queueRemove(item.name, item.dept);
+        } catch (e) {
+          if (!e.rejected) throw e;                                  // connection problem: stop, retry later
+          attendees = attendees.filter(x => !sameAtt(x, item.name, item.dept || ""));   // refused: drop it
         }
+        queueRemove(item.name, item.dept);
       }
       // 2) download the shared list and make this device match it
       const remote = await fetchOnline();
@@ -337,7 +357,12 @@
      ===================================================================== */
   async function submitName(name, dept, feedbackEl) {
     const local = addLocal(name, dept, false);
-    if (!local.ok) { showStatus(feedbackEl, local.reason, "warn"); return; }
+    if (!local.ok) {                                          // missing info, or already on this device's list
+      showStatus(feedbackEl, local.reason, "warn");
+      if (local.code === "duplicate") popupAlready({ name: titleName(cleanName(name)), dept: cleanName(dept) });
+      else popupError(local.code === "dept" ? "Choose your department" : "Enter your name", local.reason);
+      return;
+    }
     const me = attendees[attendees.length - 1];
 
     if (backendUrl && navigator.onLine) {
@@ -351,6 +376,7 @@
           } else {
             attendees = attendees.filter(a => a !== me); saveState();
             showStatus(feedbackEl, "Cancelled. You are already on the list, so there is no need to register again.", "warn");
+            showPopup("warning", "Not registered again", me, "Nothing was added because you chose Cancel. If you already registered, your name is on the list.");
             $("fullName").value = ""; resetDept("dept", "deptOther"); render();
             return;
           }
@@ -359,16 +385,68 @@
         showStatus(feedbackEl, result.duplicate
           ? "This name is already registered. No need to register again."
           : "You're registered! Your name has been added to the attendee list.", "ok");
+        if (result.duplicate) popupAlready(me); else popupSuccess(me);
       } catch (e) {
-        queueAdd(me);
+        if (e.rejected) {                 // the database refused it: nothing was saved, keep the form filled so they can retry
+          attendees = attendees.filter(a => a !== me); saveState();
+          showStatus(feedbackEl, "Registration was not accepted. " + e.message, "err");
+          popupError("Registration not accepted", e.message + " Please check your details and try again.");
+          render();
+          return;
+        }
+        queueAdd(me);                     // connection problem: keep it on this device and upload later
         showStatus(feedbackEl, "Saved on this device. It will sync when the connection is available. (" + e.message + ")", "warn");
+        popupSaved(me);
       }
     } else {
       queueAdd(me);
       showStatus(feedbackEl, "Saved on this device. It will sync when you're online.", "warn");
+      popupSaved(me);
     }
     $("fullName").value = ""; resetDept("dept", "deptOther"); render();
   }
+
+  /* =====================================================================
+     9b. POP-UP MESSAGES  (success / saved offline / warning / error)
+     ===================================================================== */
+  let popupTimer, popupType = "";
+  const POPUP_STYLES = {                        // seconds before it closes itself + button label
+    success: { seconds: 8,  button: "Done" },
+    pending: { seconds: 8,  button: "Done" },
+    warning: { seconds: 10, button: "OK" },
+    error:   { seconds: 12, button: "Try again" }
+  };
+
+  function showPopup(type, title, person, text) {
+    const modal = $("successModal"), cfg = POPUP_STYLES[type];
+    popupType = type;
+    modal.className = "modal " + type;
+    $("successTitle").textContent = title;
+    $("successName").textContent = person ? person.name + (person.dept ? " · " + person.dept : "") : "";
+    $("successName").classList.toggle("hidden", !person);
+    $("successText").textContent = text;
+    $("successClose").textContent = cfg.button;
+    modal.style.setProperty("--auto", cfg.seconds + "s");
+    clearTimeout(popupTimer);
+    void modal.offsetWidth;                                   // restart the animations
+    modal.classList.add("show");
+    modal.setAttribute("aria-hidden", "false");
+    $("successClose").focus({ preventScroll: true });
+    popupTimer = setTimeout(() => hidePopup(false), cfg.seconds * 1000);
+  }
+
+  function hidePopup(refocusForm) {
+    clearTimeout(popupTimer);
+    const modal = $("successModal");
+    modal.classList.remove("show");
+    modal.setAttribute("aria-hidden", "true");
+    if (refocusForm && popupType === "error") $("fullName").focus({ preventScroll: true });
+  }
+
+  const popupSuccess = p => showPopup("success", "You're registered!", p, "Thank you! See you at the party!");
+  const popupSaved = p => showPopup("pending", "Saved on this device", p, "Your name is saved and will upload automatically when this device is back online.");
+  const popupAlready = p => showPopup("warning", "Already registered", p, "This name is already on the list under that department, so there is no need to register again. If you are a different person with the same name, please choose your own department.");
+  const popupError = (title, text) => showPopup("error", title, null, text);
 
   /* =====================================================================
      10. ADMIN ACTIONS  (open the site with /#admin)
@@ -463,7 +541,9 @@
       e.preventDefault();
       const btn = $("submitBtn");
       btn.disabled = true;
-      submitName($("fullName").value, getDept("dept", "deptOther"), $("registerStatus")).finally(() => { btn.disabled = false; });
+      submitName($("fullName").value, getDept("dept", "deptOther"), $("registerStatus"))
+        .catch(() => popupError("Something went wrong", "Your registration could not be completed. Please try again."))
+        .finally(() => { btn.disabled = false; });
     });
 
     $("addManual").onclick = addManual;
@@ -474,6 +554,9 @@
     $("saveBackend").onclick = saveBackendUrl;
     $("testBackend").onclick = testBackend;
     $("printQr").onclick = () => window.print();
+    $("successClose").onclick = () => hidePopup(true);
+    $("successModal").addEventListener("click", e => { if (e.target === $("successModal")) hidePopup(false); });
+    document.addEventListener("keydown", e => { if (e.key === "Escape") hidePopup(false); });
 
     bindOther("dept", "deptOther");
     bindOther("manualDept", "manualDeptOther");
