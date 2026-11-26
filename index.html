@@ -13,6 +13,7 @@
 <body>
 <div class="snow"></div>
 <header>
+  <div class="snowfall" id="snowfall" aria-hidden="true"></div>
   <div class="header-inner">
     <div class="header-text">
       <div class="eyebrow"></div>
@@ -114,6 +115,7 @@
     otherValue: "__other__",     // value of the "Others (not listed)" option
     jsonpTimeoutMs: 12000,       // give up on the database after 12 s
     autoSyncMs: 30000,           // retry waiting names every 30 s
+    snowflakes: { phone: 14, desktop: 26 },   // how many snowflakes fall in the header
 
     storage: {                   // browser storage keys
       attendees: "winterPartyAttendees_v1",
@@ -443,7 +445,7 @@
     if (refocusForm && popupType === "error") $("fullName").focus({ preventScroll: true });
   }
 
-  const popupSuccess = p => showPopup("success", "You're registered!", p, "Thank you! See you at the party!");
+  const popupSuccess = p => showPopup("success", "You're registered!", p, "Thank you! Your name is on the Duck Race raffle list. See you at the party!");
   const popupSaved = p => showPopup("pending", "Saved on this device", p, "Your name is saved and will upload automatically when this device is back online.");
   const popupAlready = p => showPopup("warning", "Already registered", p, "This name is already on the list under that department, so there is no need to register again. If you are a different person with the same name, please choose your own department.");
   const popupError = (title, text) => showPopup("error", title, null, text);
@@ -531,6 +533,35 @@
   }
 
   /* =====================================================================
+     11b. FALLING SNOWFLAKES  (header decoration only)
+     ===================================================================== */
+  function startSnowfall() {
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;   // respect "reduce motion"
+    const box = $("snowfall"), header = box.parentElement;               // the snow lives inside the header only
+    const headerHeight = () => Math.max(header.offsetHeight, 90);
+    const setHeight = () => box.style.setProperty("--h", headerHeight() + "px");
+    setHeight();
+    window.addEventListener("resize", setHeight);
+
+    const count = innerWidth < 600 ? CONFIG.snowflakes.phone : CONFIG.snowflakes.desktop;
+    const rand = (min, max) => min + Math.random() * (max - min);
+    for (let i = 0; i < count; i++) {
+      const speed = rand(14, 28);                                         // pixels per second: slow and calm
+      const fall = (headerHeight() + 60) / speed;                         // seconds to cross the header
+      const f = document.createElement("span");
+      f.className = "flake";
+      f.style.setProperty("--x", rand(0, 100).toFixed(1) + "%");
+      f.style.setProperty("--s", Math.round(rand(12, 24)) + "px");
+      f.style.setProperty("--o", rand(0.8, 1).toFixed(2));
+      f.style.setProperty("--fall", fall.toFixed(1) + "s");
+      f.style.setProperty("--sway-t", rand(3, 6).toFixed(1) + "s");
+      f.style.setProperty("--drift", Math.round(rand(8, 22)) + "px");
+      f.style.setProperty("--delay", (-rand(0, fall)).toFixed(1) + "s");  // negative = already falling at page load
+      box.appendChild(f);
+    }
+  }
+
+  /* =====================================================================
      12. START-UP
      ===================================================================== */
   function wireEvents() {
@@ -570,6 +601,7 @@
     $("backendUrl").value = backendUrl;
     fillDepartments();
     wireEvents();
+    startSnowfall();
     applyMode();
     render();
     if (queue.length) syncAll();
